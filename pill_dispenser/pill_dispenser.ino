@@ -29,7 +29,7 @@ DS1302 rtc(RTC_RST, RTC_DAT, RTC_CLK);  // RTC 객체
 Servo servo;  // 서보모터 객체
 
 // 변수들
-int count = 0;  // 횟수 저장 변수
+int count = 1;  // 횟수 저장 변수
 int currentHour = 0;   // 현재 설정 중인 시간
 int currentMinute = 0; // 현재 설정 중인 분
 String timeList[10];   // 시간 데이터 리스트 (최대 10개) - "HH:MM" 형식
