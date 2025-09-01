@@ -3,12 +3,15 @@
 #include <Wire.h>               // I2C 통신용
 #include <LiquidCrystal_I2C.h>  // LCD 제어용
 #include <Servo.h>              // 서보모터 제어용
+#include <ESP8266WiFi.h>        // WIFI 설정 
+#include <ESP8266HTTPClient.h>
+#include <WiFiClientSecure.h>
 
 // 핀 정의 (Wemos D1 R32 ESP8266 핀 할당)
 #define LCD_SCL_PIN    D3    // LCD SCL  
 #define LCD_SDA_PIN    D4    // LCD SDA
 #define RTC_RST        D12   // DS1302 RST
-#define RTC_DAT        D13  // DS1302 DAT
+#define RTC_DAT        D13   // DS1302 DAT
 #define RTC_CLK        D11   // DS1302 CLK
 #define SERVO_PIN      D7    // 서보모터
 #define BUTTON_1       D9    // 시간 증가 버튼
@@ -23,6 +26,13 @@
 
 // LCD 객체 생성 (I2C 주소는 ESP8266에서 보통 0x27 또는 0x3F)
 LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+// WiFi 설정
+const char* ssid = "StarLAB_Korea";
+const char* password = "starlabkorea2018";
+
+// 구글 스크립트 URL
+String script_url = "----------------------------------------------------------------------------------------------------------------";
 
 // 객체 생성
 DS1302 rtc(RTC_RST, RTC_DAT, RTC_CLK);  // RTC 객체
@@ -39,6 +49,10 @@ int timeCount = 0;     // 리스트에 저장된 시간 개수
 bool lastValueBtn = HIGH;
 bool lastTimeBtn = HIGH;
 bool lastInteractionBtn = HIGH;
+
+// 배출 관련 변수들
+int dispenseCount = 0;         // 현재 배출 횟수 (0~3, 4회 순환)
+int currentAngle = 0;          // 현재 서보 각도
 
 // 부저 함수들
 void beepShort() {
@@ -66,6 +80,198 @@ void beepAlert() {
     tone(BUZZER_PIN, 1500, 200);
     delay(250);
   }
+}
+
+// RTC에서 현재 시간을 "HH:MM" 형식으로 가져오는 함수
+String getCurrentTimeString() {
+  String timeStr = rtc.getTimeStr();
+  // "HH:MM:SS" 형식에서 "HH:MM"만 추출
+  return timeStr.substring(0, 5);
+}
+
+// WiFi 연결 상태 확인 및 재연결
+bool ensureWiFiConnection() {
+  int retryCount = 0;
+  const int maxRetries = 10;
+  
+  // 이미 연결되어 있으면 true 반환
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("WiFi already connected!");
+    return true;
+  }
+  
+  Serial.print("Connecting to WiFi: ");
+  Serial.println(ssid);
+  
+  // WiFi 연결 시도
+  WiFi.begin(ssid, password);
+  
+  // 연결 대기 (최대 10초)
+  while (WiFi.status() != WL_CONNECTED && retryCount < maxRetries) {
+    delay(1000);
+    Serial.print(".");
+    retryCount++;
+    
+    // LCD에 연결 진행률 표시
+    lcd.setCursor(0, 1);
+    lcd.print("WiFi: ");
+    lcd.print(retryCount);
+    lcd.print("/");
+    lcd.print(maxRetries);
+  }
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nWiFi connected successfully!");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
+    return true;
+  } else {
+    Serial.println("\nWiFi connection failed!");
+    return false;
+  }
+}
+
+// 통합된 이메일 전송 함수
+bool sendEmail(bool isSuccess) {
+  // WiFi 연결 확인
+  if (!ensureWiFiConnection()) {
+    Serial.println("WiFi connection failed - cannot send email");
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("WiFi Failed!");
+    lcd.setCursor(0, 1);
+    lcd.print("Check connection");
+    beepLong(); // 경고음
+    delay(2000);
+    return false;
+  }
+  
+  WiFiClientSecure client;
+  HTTPClient http;
+  
+  client.setInsecure();
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  
+  if (!http.begin(client, script_url)) {
+    Serial.println("Failed to connect to the script URL.");
+    return false;
+  }
+  
+  http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+  
+  String postData;
+  if (isSuccess) {
+    postData = "recipient=-------------------------------"
+               "&subject=%5B%EC%95%8C%EC%95%BD%EB%94%94%EC%8A%A4%ED%8E%9C%EC%84%9C%5D%20%EC%95%BD%20%EB%B0%B0%EC%B6%9C%20%EC%99%84%EB%A3%8C"
+               "&body=%EC%95%8C%EC%95%BD%20%EB%B0%B0%EC%B6%9C%EC%9D%B4%20%EC%A0%95%EC%83%81%EC%A0%81%EC%9C%BC%EB%A1%9C%20%EC%99%84%EB%A3%8C%EB%90%98%EC%97%88%EC%8A%B5%EB%8B%88%EB%8B%A4.%20%EC%8B%9C%EA%B0%84%3A%20" + getCurrentTimeString();
+  } else {
+    postData = "recipient=-------------------------------"
+               "&subject=%5B%EC%95%8C%EC%95%BD%EB%94%94%EC%8A%A4%ED%8E%9C%EC%84%9C%5D%20%EC%95%8C%EB%A6%BC%20-%20%EC%82%AC%EC%9A%A9%EC%9E%90%20%EB%AF%B8%EB%B0%98%EC%9D%91"
+               "&body=%EC%95%BD%20%EB%B3%B5%EC%9A%A9%20%EC%8B%9C%EA%B0%84%EC%97%90%20%EC%82%AC%EC%9A%A9%EC%9E%90%EA%B0%80%20%EB%B0%98%EC%9D%91%ED%95%98%EC%A7%80%20%EC%95%8A%EC%95%98%EC%8A%B5%EB%8B%88%EB%8B%A4.%20%ED%99%95%EC%9D%B8%20%EB%B0%94%EB%9E%8D%EB%8B%88%EB%8B%A4.%20%EC%8B%9C%EA%B0%84%3A%20" + getCurrentTimeString();
+  }
+  
+  int httpCode = http.POST(postData);
+  bool success = false;
+  
+  if (httpCode > 0) {
+    String payload = http.getString();
+    Serial.println("HTTP Code: " + String(httpCode));
+    Serial.println("Response: " + payload);
+    
+    if (httpCode == 200) {
+      success = true;
+      Serial.println("Email sent successfully!");
+    } else {
+      Serial.println("HTTP request successful but server returned error");
+    }
+  } else {
+    Serial.printf("HTTP Request failed, error: %s\n", http.errorToString(httpCode).c_str());
+  }
+  
+  http.end();
+  return success;
+}
+
+// 배출 성공 이메일 전송
+void sendStartupEmail_SUCCESS() {
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Sending email...");
+  lcd.setCursor(0, 1);
+  lcd.print("Success report");
+  
+  if (sendEmail(true)) {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Email sent!");
+    lcd.setCursor(0, 1);
+    lcd.print("Success");
+    beepSuccess();
+  } else {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Email failed!");
+    lcd.setCursor(0, 1);
+    lcd.print("Will retry later");
+    beepLong();
+  }
+  delay(2000);
+}
+
+// 타임아웃 알림 이메일 전송
+void sendStartupEmail_FAIL() {
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Sending email...");
+  lcd.setCursor(0, 1);
+  lcd.print("Timeout alert");
+  
+  if (sendEmail(false)) {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Email sent!");
+    lcd.setCursor(0, 1);
+    lcd.print("Alert sent");
+    beepSuccess();
+  } else {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Email failed!");
+    lcd.setCursor(0, 1);
+    lcd.print("Check connection");
+    beepLong();
+  }
+  delay(2000);
+}
+
+// WiFi 초기 설정
+void setupWiFi() {
+  // WiFi 모드 설정
+  WiFi.mode(WIFI_STA);
+  
+  // 자동 재연결 활성화
+  WiFi.setAutoReconnect(true);
+  WiFi.persistent(true);
+  
+  // 초기 연결 시도
+  lcd.clear();
+  lcd.print("Setting up WiFi");
+  
+  if (ensureWiFiConnection()) {
+    lcd.clear();
+    lcd.print("WiFi connected!");
+    lcd.setCursor(0, 1);
+    lcd.print("IP: ");
+    lcd.print(WiFi.localIP().toString().substring(10)); // 마지막 부분만 표시
+    beepSuccess();
+  } else {
+    lcd.clear();
+    lcd.print("WiFi setup failed");
+    lcd.setCursor(0, 1);
+    lcd.print("Will retry later");
+    beepLong();
+  }
+  delay(2000);
 }
 
 // 시간 배열 정렬 함수 (중복 제거 포함)
@@ -120,71 +326,74 @@ bool isScheduledTime(String currentTime) {
   return false;
 }
 
-// RTC에서 현재 시간을 "HH:MM" 형식으로 가져오는 함수
-String getCurrentTimeString() {
-  String timeStr = rtc.getTimeStr();
-  // "HH:MM:SS" 형식에서 "HH:MM"만 추출
-  return timeStr.substring(0, 5);
+// 서보모터 속도 제어 설정
+#define SERVO_SPEED_DELAY 15  // 속도 조절 (작을수록 빠름, 5~50 권장)
+
+// 서보모터를 천천히 움직이는 함수
+void moveServoSlowly(int startAngle, int endAngle) {
+  servo.attach(SERVO_PIN);
+  delay(300);  // 서보 안정화
+  
+  if (startAngle < endAngle) {
+    // 정방향 회전
+    for (int angle = startAngle; angle <= endAngle; angle++) {
+      servo.write(angle);
+      delay(SERVO_SPEED_DELAY);
+      yield();  // ESP8266 watchdog reset 방지
+    }
+  } else {
+    // 역방향 회전
+    for (int angle = startAngle; angle >= endAngle; angle--) {
+      servo.write(angle);
+      delay(SERVO_SPEED_DELAY);
+      yield();  // ESP8266 watchdog reset 방지
+    }
+  }
+  
+  delay(500);  // 최종 위치에서 안정화
+  servo.detach();  // 서보모터 정지
 }
 
-// 약 배출 함수 (간소화된 버전 - 대기 과정 제거)
-bool dispenseMedicine() {
-  Serial.println("=== DISPENSING MEDICINE ===");
+// 수정된 약 배출 함수 - 속도 제어 적용
+void dispenseOnePill() {
+  // 다음 각도 계산 (30도씩 증가하다가 4번째에는 0도로 리셋)
+  int nextAngle;
+  if(dispenseCount == 0) nextAngle = 70;       // 1번째: 70도
+  else if(dispenseCount == 1) nextAngle = 140;  // 2번째: 140도  
+  else if(dispenseCount == 2) nextAngle = 180;  // 3번째: 180도
+  else nextAngle = 0;                          // 4번째: 0도로 리셋
+  
+  Serial.print("=== DISPENSING #");
+  Serial.print(dispenseCount + 1);
+
   
   // LCD로 진행 상황 표시
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Dispensing...");
   lcd.setCursor(0, 1);
-  lcd.print("DISPENSING...   ");
+  lcd.print("Moving slowly");
   
-  // 서보 재초기화 (확실하게!)
-  servo.detach();
-  delay(100);
-  servo.attach(SERVO_PIN);
-  delay(500);
+  // 천천히 서보 이동
+  moveServoSlowly(currentAngle, nextAngle);
+  currentAngle = nextAngle;
   
-  Serial.println("Step 1: Moving to 0 degrees (확실한 시작점)");
-  servo.write(0);
-  delay(2000);  // 2초 대기
-  
-  Serial.println("Step 2: Moving to 180 degrees (최대한 돌리기!)");
-  lcd.setCursor(0, 1);
-  lcd.print("MOVING 180 DEG  ");
-  servo.write(180);  // 0도에서 180도로 크게 이동!
-  delay(3000);  // 3초 대기 (충분히 기다림)
-  
-  Serial.println("Step 3: Moving to 90 degrees (중간)");
-  lcd.setCursor(0, 1);
-  lcd.print("MOVING 90 DEG   ");
-  servo.write(90);
-  delay(2000);  // 2초 대기
-  
-  Serial.println("Step 4: Back to 0 degrees (원위치)");
-  lcd.setCursor(0, 1);
-  lcd.print("RETURNING...    ");
-  servo.write(0);
-  delay(3000);  // 3초 대기 (완전 복귀)
+  // 배출 횟수 증가 (0~3 순환)
+  dispenseCount = (dispenseCount + 1) % 4;
   
   // 배출 완료 표시
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Dispensed!");
   lcd.setCursor(0, 1);
-  lcd.print("DISPENSED!      ");
+
   
-  Serial.println("=== MEDICINE DISPENSED! ===");
+  Serial.print("=== DISPENSE COMPLETED ");
+
   
   // 성공 부저음
   beepSuccess();
   delay(2000);
-  
-  // 완료 화면
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Medicine Ready!");
-  lcd.setCursor(0, 1);
-  lcd.print("Please take it");
-  
-  // 완료 부저음
-  beepSuccess();
-  delay(3000);
-  
-  return true;  // 성공 반환
 }
 
 void setup() {
@@ -222,6 +431,9 @@ void setup() {
   servo.attach(SERVO_PIN);
   servo.write(0);
   delay(500);  // 서보 안정화 시간
+
+  // WiFi 설정
+  setupWiFi();
 
   // RTC 초기화
   Serial.println("Initializing RTC...");
@@ -297,15 +509,35 @@ void loop(){
     yield();  // ESP8266 watchdog reset 방지
   }
   
-  // 두 번째 루프: 시간 설정 (30분 단위, 00:00부터 시작)
+  // 두 번째 루프: 시간 설정 (1분 단위로 증가, RTC 현재 시간부터 시작)
   timeCount = 0;  // 저장된 시간 개수 초기화
-  currentHour = 0;    // 00:00부터 시작
-  currentMinute = 0;  // 00:00부터 시작
+  
+  // RTC에서 현재 시간 가져와서 기본값으로 설정
+  Time currentTime = rtc.getTime();
+  currentHour = currentTime.hour;
+  currentMinute = currentTime.min;
+  
+  // 현재 시간 다음 분으로 설정 (1분 후부터 시작)
+  currentMinute = currentMinute + 1;
+  if (currentMinute >= 60) {
+    currentMinute = 0;
+    currentHour++;
+    if (currentHour >= 24) {
+      currentHour = 0;
+    }
+  }
+  
+  Serial.print("Starting time setting from RTC current time + 1min: ");
+  if(currentHour < 10) Serial.print("0");
+  Serial.print(currentHour);
+  Serial.print(":");
+  if(currentMinute < 10) Serial.print("0");
+  Serial.println(currentMinute);
   
   lcd.clear();
   lcd.print("Set Times");
   lcd.setCursor(0, 1);
-  lcd.print("30min steps");
+  lcd.print("From RTC+1min");
   delay(2000);
   
   while(1) {
@@ -313,9 +545,9 @@ void loop(){
     bool currentTimeBtn = digitalRead(TIME_BTN);
     bool currentInteractionBtn = digitalRead(TINTERATION_BTN);
     
-    // 시간 버튼이 눌렸을 때 (30분씩 증가)
+    // 시간 버튼이 눌렸을 때 (1분씩 증가로 변경)
     if (lastTimeBtn == HIGH && currentTimeBtn == LOW) {
-      currentMinute += 30;  // 30분씩 증가
+      currentMinute += 1;  // 1분씩 증가로 변경
       if (currentMinute >= 60) {
         currentMinute = 0;
         currentHour++;
@@ -456,63 +688,109 @@ void loop(){
       // 약 복용 시간 알림 부저음
       beepAlert();
       
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Medicine Time!");
       lcd.setCursor(0, 1);
-      lcd.print("Press INTERACTION");
+      lcd.print("Press to dispense");
       
       Serial.print("Medicine time! ");
       Serial.print(currentRTCTime);
-      Serial.println(" - Waiting for user action");
+      Serial.println(" - Waiting for dispense button");
     }
     
     // 시간이 바뀌면 lastCheckedTime 업데이트
     if(currentRTCTime != lastCheckedTime && !waitingForDispense) {
       lastCheckedTime = currentRTCTime;
     }
-    
-    // 배출 대기 중일 때 상호작용 버튼 확인
+
+    // 배출 대기 중일 때
     if(waitingForDispense) {
       bool currentInteractionBtn = digitalRead(TINTERATION_BTN);
       
+      // 상호작용 버튼을 눌렀을 때 - 약 배출하고 바로 완료 처리
       if(lastInteractionBtn == HIGH && currentInteractionBtn == LOW) {
-        // LCD 피드백
+        // 약 배출 실행
+        dispenseOnePill();
+        
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("Sending WiFi...");
         lcd.setCursor(0, 1);
-        lcd.print("PROCESSING...   ");
+        lcd.print("Please wait");
         
-        // 약 배출 확인 부저음
-        beepShort();
+        // 성공 이메일 발송
+        sendStartupEmail_SUCCESS();
         
-        // 약 배출 시도
-        bool dispenseSuccess = dispenseMedicine();
+        // WiFi 전송 완료 표시
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("WiFi Complete!");
+        lcd.setCursor(0, 1);
+        lcd.print("Dispensed OK");
         
-        if(dispenseSuccess) {
-          // 배출 성공시
-          lcd.setCursor(0, 1);
-          lcd.print("Dispensed OK!   ");
-          
-          Serial.println("Medicine dispensed successfully!");
-          
-          // 3초 대기 후 정상 모니터링 재개
-          delay(3000);
-          
-          waitingForDispense = false;
-          Serial.println("System resumed normal monitoring");
-          
-        } else {
-          // 배출 실패시 - 다시 시도할 수 있도록 대기 상태 유지
-          lcd.setCursor(0, 1);
-          lcd.print("RETRY? Press BTN");
-          
-          Serial.println("Dispensing failed! Please try again...");
-          
-          // 실패시에는 waitingForDispense를 true로 유지해서 다시 시도 가능
-          delay(2000);
-        }
+        Serial.println("Medicine dispensed and WiFi sent successfully!");
+        
+        // 완료 표시 (지연 시간 단축)
+        beepSuccess();
+        delay(1000);  // 2초에서 1초로 단축
+        
+        // 바로 모니터링으로 복귀
+        waitingForDispense = false;
+        Serial.println("Returning to normal monitoring.");
+      }
+      
+      // 60초 타임아웃 체크 (상호작용 버튼을 누르지 않을 때만)
+      static unsigned long waitStartTime = 0;
+      static bool timeoutStarted = false;
+      
+      // 대기 상태가 시작되었을 때 타임스탬프 기록
+      if(!timeoutStarted) {
+        waitStartTime = millis();
+        timeoutStarted = true;
+      }
+      
+      // 60초 경과 체크
+      if(millis() - waitStartTime >= 60000) {
+        // 60초 타임아웃 - 약을 배출하지 않았을 때
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("Sending WiFi...");
+        lcd.setCursor(0, 1);
+        lcd.print("Timeout alert");
+        
+        sendStartupEmail_FAIL();
+        
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("WiFi Complete!");
+        lcd.setCursor(0, 1);
+        lcd.print("Press to dispense");
+        
+        Serial.println("60 second timeout! User did not press dispense button. WiFi sent.");
+        beepLong(); // 경고음
+        
+        // 타임아웃 플래그 리셋하여 다시 60초 카운트 시작
+        timeoutStarted = false;
+      } else {
+        // 남은 시간을 LCD에 표시
+        unsigned long remainingTime = (60000 - (millis() - waitStartTime)) / 1000;
+        lcd.setCursor(0, 1);
+        lcd.print("Dispense: ");
+        if(remainingTime < 10) lcd.print(" ");
+        lcd.print(remainingTime);
+        lcd.print("s   ");
       }
       
       lastInteractionBtn = currentInteractionBtn;
       
+      // 대기 상태 종료 시 타임아웃 플래그 리셋
+      if(!waitingForDispense && timeoutStarted) {
+        timeoutStarted = false;
+      }
+      
       // 배출 대기 중에는 짧은 딜레이로 버튼 반응성 향상
-      delay(50);
+      delay(100);
       
     } else {
       // 정상 모니터링 중
