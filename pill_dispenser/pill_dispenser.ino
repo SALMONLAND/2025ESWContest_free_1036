@@ -1,3 +1,13 @@
+/*  
+   In main_code, the url and recipient are silently replaced with "----". 
+   This is for personal information security. 
+
+   To use the code, distribute the project from the following site: 
+   https://developers.google.com/apps-script?hl=ko 
+
+   Insert the url, and insert the email address to receive in the recipient. 
+*/
+
 // 라이브러리 목록
 #include <DS1302.h>             // RTC 모듈 제어용
 #include <Wire.h>               // I2C 통신용
