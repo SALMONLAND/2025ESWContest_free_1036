@@ -1,0 +1,57 @@
+function doPost(e) {
+  try {
+    // POST 요청에서 파라미터 추출
+    var recipient = e.parameter.recipient || '';
+    var subject = decodeURIComponent(e.parameter.subject || '');
+    var body = decodeURIComponent(e.parameter.body || '');
+    
+    // 로그 기록
+    console.log('받은 파라미터:', {
+      recipient: recipient,
+      subject: subject,
+      body: body
+    });
+    
+    // 이메일 전송
+    if (recipient && subject && body) {
+      GmailApp.sendEmail(recipient, subject, body);
+      
+      return ContentService
+        .createTextOutput(JSON.stringify({
+          'status': 'success',
+          'message': '이메일이 성공적으로 전송되었습니다.',
+          'timestamp': new Date().toISOString()
+        }))
+        .setMimeType(ContentService.MimeType.JSON);
+    } else {
+      return ContentService
+        .createTextOutput(JSON.stringify({
+          'status': 'error',
+          'message': '필수 파라미터가 누락되었습니다.',
+          'timestamp': new Date().toISOString()
+        }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    
+  } catch (error) {
+    console.error('오류 발생:', error);
+    return ContentService
+      .createTextOutput(JSON.stringify({
+        'status': 'error',
+        'message': '이메일 전송 중 오류가 발생했습니다: ' + error.toString(),
+        'timestamp': new Date().toISOString()
+      }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function doGet(e) {
+  // GET 요청도 처리할 수 있도록 (테스트 목적)
+  return ContentService
+    .createTextOutput(JSON.stringify({
+      'status': 'success',
+      'message': '알약디스펜서 이메일 서비스가 정상 작동 중입니다.',
+      'timestamp': new Date().toISOString()
+    }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
