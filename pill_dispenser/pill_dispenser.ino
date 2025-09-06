@@ -38,8 +38,8 @@
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
 // WiFi 설정
-const char* ssid = "StarLAB_Korea";
-const char* password = "starlabkorea2018";
+const char* ssid = "---";
+const char* password = "---";
 
 // 구글 스크립트 URL
 String script_url = "----------------------------------------------------------------------------------------------------------------";
